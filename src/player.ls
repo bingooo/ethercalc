@@ -10,7 +10,7 @@
     SocialCalc._app = true if requestParams[\app]?    
     SocialCalc._view = true if requestParams[\view]?
     #SocialCalc._view = SocialCalc._auth is \0     
-    SocialCalc._room ?= window.location.hash.replace \# ''
+    SocialCalc._room ?= window.EtherCalc?_room || window.location.hash.replace \# ''
     SocialCalc._room = "#{SocialCalc._room}".replace /^_+/ '' .replace /\?.*/ ''
 
     endpoint = $('script[src*="/socket.io/socket.io.js"]')?attr(\src)?replace(/\.?\/socket.io\/socket.io.js.*/ '')
@@ -82,7 +82,7 @@
     SocialCalc.isConnected = true
     SocialCalc.RecalcInfo.LoadSheetCache = {}
     SocialCalc.RecalcInfo.LoadSheet = (ref) ->
-      return if ref is /[^.a-zA-Z0-9]/
+      return if ref is /[^.=_a-zA-Z0-9]/
       ref.=toLowerCase!
       emit type: \ask.recalc, user: SocialCalc._username, room: ref
 
@@ -116,7 +116,7 @@
         if @data.original
           origCR   = SocialCalc.coordToCr @data.original
           origCell = SocialCalc.GetEditorCellElement editor, origCR.row, origCR.col
-          origCell.element.className = origCell.element.className.replace find, ''
+          origCell?.element.className = origCell.element.className.replace find, ''
           if @data.original is editor.ecell.coord or @data.ecell is editor.ecell.coord
             SocialCalc.Callbacks.broadcast \ecell,
               to: @data.user
@@ -126,6 +126,7 @@
         cell = SocialCalc.GetEditorCellElement editor, cr.row, cr.col
         cell.element.className += peerClass if cell?element?className.search(find) == -1
       | \ask.ecell
+        break if SocialCalc._app 
         SocialCalc.Callbacks.broadcast \ecell do
           to: @data.user
           ecell: editor.ecell.coord
@@ -143,15 +144,6 @@
           if parts?sheet
             ss.formDataViewer.ParseSheetSave( @data.snapshot.substring( parts.sheet.start, parts.sheet.end))
             ss.formDataViewer.context.sheetobj.ScheduleSheetCommands "recalc\n", false, true
-            # request the spreadsheet data
-            # show formdata if not blank
-            #if !SocialCalc._app? && (ss.formDataViewer.sheet.attribs.lastcol != 1 ||  ss.formDataViewer.sheet.attribs.lastrow != 1)
-              #ss.formDataViewer.parentNode.style.visibility = "visible"
-              #ss.formDataViewer.parentNode.style.display = "inline"
-              #SocialCalc.CalculateSheetNonViewHeight(ss)
-              #ss.nonviewheight = 324
-              #ss.height = 0;
-              #ss.DoOnResize!              
           break
         #}
         break if SocialCalc.hadSnapshot
@@ -164,7 +156,7 @@
             ss.ParseSheetSave @data.snapshot.substring parts.sheet.start, parts.sheet.end
           if parts.edit
             ss.editor.LoadEditorSettings @data.snapshot.substring parts.edit.start, parts.edit.end
-            ss.editor.ScheduleRender!
+            # render not needed, render is triggered by:  CreateTableEditor (renders empty sheet) then RecalcTimerRoutine (renders loaded sheet)
         window.addmsg? @data.chat.join(\\n), true
         cmdstr = [ line for line in @data.log
              | not /^re(calc|display)$/.test(line) ].join \\n
@@ -184,7 +176,8 @@
           ss.context.sheetobj.ScheduleSheetCommands "recalc\n", false, true
       | \recalc
         if @data.force
-          SocialCalc.Formula.SheetCache.sheets = {}
+          # only remove updated sheet - fix cycle problem when using many sheets
+          delete SocialCalc.Formula.SheetCache.sheets[@data.room]
           ss?sheet.recalconce = true
         parts = ss.DecodeSpreadsheetSave @data.snapshot if @data.snapshot
         if parts?sheet

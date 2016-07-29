@@ -21,7 +21,7 @@
 
   HMAC_CACHE = {}
   hmac = if !KEY then -> it else -> HMAC_CACHE[it] ||= do
-    encoder = require \crypto .createHmac \sha256 KEY
+    encoder = require \crypto .createHmac \sha256 (new Buffer KEY)
     encoder.update it.toString!
     encoder.digest \hex
 
@@ -53,18 +53,27 @@
   new-room = -> require \uuid-pure .newId 12 36 .toLowerCase!
 
   @get '/': sendFile \index.html
-  @get '/favicon.ico': -> @response.send 404 ''
-  #@get '/favicon.ico': sendFile \favicon.ico  #return site icon
+  #@get '/favicon.ico': -> @response.send 404 ''
+  #return site icons
+  @get '/favicon.ico': sendFile \favicon.ico
+  @get '/android-chrome-192x192.png': sendFile \android-chrome-192x192.png
+  @get '/apple-touch-icon.png': sendFile \apple-touch-icon.png
+  @get '/browserconfig.xml': sendFile \browserconfig.xml
+  @get '/favicon-16x16.png': sendFile \favicon-16x16.png
+  @get '/favicon-32x32.png': sendFile \favicon-32x32.png
+  @get '/favicon-32x32.png': sendFile \favicon-32x32.png
+  @get '/mstile-150x150.png': sendFile \mstile-150x150.png
+  @get '/mstile-310x310.png': sendFile \mstile-310x310.png
+  @get '/safari-pinned-tab.svg': sendFile \safari-pinned-tab.svg
   @get '/manifest.appcache': ->
     @response.type \text/cache-manifest
     if DevMode
       @response.send 200 "CACHE MANIFEST\n\n##{Date!}\n\nNETWORK:\n*\n"
     else
       @response.sendfile "#RealBin/manifest.appcache"
-  @get '/static/socialcalc:part.js': ->
-    part = @params.part
+  @get '/static/socialcalc.js': ->
     @response.type \application/javascript
-    @response.sendfile "#RealBin/socialcalc#part.js"
+    @response.sendfile "#RealBin/node_modules/socialcalc/SocialCalc.js"
   @get '/static/form:part.js': ->
     part = @params.part
     @response.type \application/javascript
@@ -208,6 +217,18 @@
         rooms <~ SC._rooms 
         @response.type \application/json
         @response.json 200 rooms
+  if @CORS
+     @get '/_roomlinks' : ->
+        @response.type Text
+        return @response.send 403 '_roomlinks not available with CORS'
+  else
+     @get '/_roomlinks' : ->
+        rooms <~ SC._rooms 
+        roomlinks = for room in rooms
+          "<a href=#BASEPATH/#room>#room</a>"
+        @response.type Html
+        @response.json 200 roomlinks
+
   @get '/_from/:template': ->
     room = new-room!
     template = @params.template
@@ -290,6 +311,11 @@
     <~ request.on \end
     buf = Buffer.concat cs
     return cb buf.toString(\utf8) if request.is \text/x-socialcalc
+    if request.is \text/x-ethercalc-csv-double-encoded
+      iconv = require \iconv-lite
+      buf = iconv.decode buf, \utf8
+      buf = iconv.encode buf, \latin1
+      buf = iconv.decode buf, \utf8
     # TODO: Move to thread
     for k, save of (J.utils.to_socialcalc(J.read buf) || {'': ''})
       return cb save
@@ -336,13 +362,12 @@
   @post '/_/:room': ->
     #console.log "post /_/:room"
     {room} = @params
-    return if room is \Kaohsiung-explode-20140801
     command <~ request-to-command @request
     unless command
       @response.type Text
       return @response.send 400 'Please send command'
     {log, snapshot} <~ SC._get room, IO
-    if command is /^loadclipboard\s*/
+    if not (@request.is \application/json) and command is /^loadclipboard\s*/
       row = 1
       if snapshot is /\nsheet:c:\d+:r:(\d+):/
         row += Number(RegExp.$1)
@@ -444,13 +469,16 @@
         SC[room] = SC._init snapshot, log, DB, room, @io
       # eddy @on data {
       if commandParameters[0].trim() is \submitform
-        console.log "test SC[#{room}] submitform..."      
-        unless SC["#{room}_formdata"]?
-          console.log "Submitform. loading... SC[#{room}_formdata]"
-          _, [snapshot, log] <~ DB.multi!get("snapshot-#{room}_formdata").lrange("log-#{room}_formdata", 0, -1).exec
-          SC["#{room}_formdata"] = SC._init snapshot, log, DB, "#{room}_formdata", @io   
+        room_data = if room.indexOf('_') == -1  # store data in <templatesheet>_formdata
+          then room + "_formdata"
+          else room.replace(/_[.=_a-zA-Z0-9]*$/i,"_formdata") # get formdata sheet of cloned template
+        console.log "test SC[#{room_data}] submitform..."      
+        unless SC["#{room_data}"]?
+          console.log "Submitform. loading... SC[#{room_data}]"
+          _, [snapshot, log] <~ DB.multi!get("snapshot-#{room_data}").lrange("log-#{room_data}", 0, -1).exec
+          SC["#{room_data}"] = SC._init snapshot, log, DB, "#{room_data}", @io   
         # add form values to last row of formdata sheet
-        attribs <-! SC["#{room}_formdata"]?exportAttribs
+        attribs <-! SC["#{room_data}"]?exportAttribs
         console.log "sheet attribs:" { ...attribs }       
         formrow = for let datavalue, formDataIndex in commandParameters when formDataIndex != 0
           "set #{String.fromCharCode(64 + formDataIndex)+(attribs.lastrow+1)} text t #datavalue" 
@@ -459,11 +487,11 @@
         cmdstrformdata = formrow.join("\n")
         console.log "cmdstrformdata:"+cmdstrformdata        
         <~ DB.multi!
-          .rpush "log-#{room}_formdata" cmdstrformdata
-          .rpush "audit-#{room}_formdata" cmdstrformdata
+          .rpush "log-#{room_data}" cmdstrformdata
+          .rpush "audit-#{room_data}" cmdstrformdata
           .bgsave!.exec!
-        SC["#{room}_formdata"]?ExecuteCommand cmdstrformdata
-        broadcast { room:"#{room}_formdata", user, type, auth, cmdstr: cmdstrformdata, +include_self }
+        SC["#{room_data}"]?ExecuteCommand cmdstrformdata
+        broadcast { room:"#{room_data}", user, type, auth, cmdstr: cmdstrformdata, +include_self }
       # }eddy @on data 
       SC[room]?ExecuteCommand cmdstr
       broadcast @data
